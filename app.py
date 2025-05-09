@@ -36,14 +36,43 @@ def switch_screen(screen_name):
     st.session_state.current_screen = screen_name
 
 def extract_invoice_numbers(text):
-    """Extract invoice numbers (sequences of 11 or more digits) from text."""
-    pattern = r'\b\d{11,}\b'
-    return re.findall(pattern, text)
+    """Extract invoice numbers from text.
+    
+    This looks for patterns like:
+    - Invoice No: 7112600003240
+    - Invoice Sr. No: 7112600003240
+    - Document No. 7112600003240
+    - Or just 13-digit numbers that match the format
+    """
+    # Look for invoice numbers with labels
+    labeled_patterns = [
+        r'Invoice\s+(?:No|Number|Sr\.\s+No)[:.]?\s*(\d{13})',
+        r'Document\s+No[.,]?\s*(\d{13})'
+    ]
+    
+    numbers = []
+    # First try to find labeled invoice numbers
+    for pattern in labeled_patterns:
+        matches = re.findall(pattern, text, re.IGNORECASE)
+        numbers.extend(matches)
+    
+    # If no labeled numbers found, look for any 13-digit number
+    if not numbers:
+        # Pattern for standalone 13-digit numbers (like 7112600003240)
+        standalone_pattern = r'\b(\d{13})\b'
+        numbers = re.findall(standalone_pattern, text)
+    
+    return numbers
 
 def compare_invoice_numbers(text1, text2):
     """Compare invoice numbers between two texts and find matches."""
     numbers1 = extract_invoice_numbers(text1)
     numbers2 = extract_invoice_numbers(text2)
+    
+    # Debug information
+    st.session_state.debug_numbers1 = numbers1
+    st.session_state.debug_numbers2 = numbers2
+    
     return [num for num in numbers1 if num in numbers2] or None
 
 def process_images():
@@ -94,13 +123,31 @@ def upload_screen():
         key="file_uploader"
     )
     
-    col1, col2 = st.columns([1, 1])
+    # Add text input option
+    st.write("---")
+    st.write("Or enter OCR text directly:")
+    
+    col1, col2 = st.columns(2)
     
     with col1:
+        text1 = st.text_area("Document 1 Text:", height=200, key="doc1_text")
+    
+    with col2:
+        text2 = st.text_area("Document 2 Text:", height=200, key="doc2_text")
+    
+    if text1 and text2 and st.button("COMPARE TEXT", use_container_width=True):
+        st.session_state.extracted_texts = [text1, text2]
+        st.session_state.matching_numbers = compare_invoice_numbers(text1, text2)
+        switch_screen('comparison')
+    
+    st.write("---")
+    nav_col1, nav_col2 = st.columns([1, 1])
+    
+    with nav_col1:
         if st.button("BACK", use_container_width=True):
             switch_screen('home')
     
-    with col2:
+    with nav_col2:
         if uploaded_files and st.button("SELECT IMAGES", use_container_width=True):
             files_to_process = uploaded_files[:2]
             
@@ -128,41 +175,51 @@ def comparison_screen():
     """Display the comparison results screen."""
     st.title("Document Comparison Results")
     
-    # Display images side by side
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.subheader("Document 1")
-        if st.session_state.captured_images:
-            image = Image.open(st.session_state.captured_images[0])
-            st.image(image, use_column_width=True)
-    
-    with col2:
-        st.subheader("Document 2")
-        if len(st.session_state.captured_images) > 1:
-            image = Image.open(st.session_state.captured_images[1])
-            st.image(image, use_column_width=True)
+    # Display images if available
+    if st.session_state.captured_images:
+        st.write("### Uploaded Images")
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.subheader("Document 1")
+            if st.session_state.captured_images:
+                image = Image.open(st.session_state.captured_images[0])
+                st.image(image, use_column_width=True)
+        
+        with col2:
+            st.subheader("Document 2")
+            if len(st.session_state.captured_images) > 1:
+                image = Image.open(st.session_state.captured_images[1])
+                st.image(image, use_column_width=True)
     
     # Match status
+    st.write("## Matching Results")
     if st.session_state.matching_numbers:
         st.success("✅ MATCH FOUND!")
-        st.write(f"Invoice Number: {st.session_state.matching_numbers[0]}")
+        for number in st.session_state.matching_numbers:
+            st.markdown(f"### Invoice Number: <span style='color:green; font-weight:bold'>{number}</span>", unsafe_allow_html=True)
     else:
         st.error("❌ NO MATCH FOUND")
         st.write("No matching invoice numbers between documents")
     
+    # Debug information - can be commented out in production
+    with st.expander("Debug Information"):
+        st.write("Document 1 extracted numbers:", getattr(st.session_state, 'debug_numbers1', []))
+        st.write("Document 2 extracted numbers:", getattr(st.session_state, 'debug_numbers2', []))
+    
     # Display extracted text side by side
+    st.write("## Extracted Text")
     text_col1, text_col2 = st.columns(2)
     
     with text_col1:
         st.subheader("Document 1 Text:")
         if st.session_state.extracted_texts:
-            st.text_area("", value=st.session_state.extracted_texts[0], height=300)
+            st.text_area("", value=st.session_state.extracted_texts[0], height=300, key="text1_display")
     
     with text_col2:
         st.subheader("Document 2 Text:")
         if len(st.session_state.extracted_texts) > 1:
-            st.text_area("", value=st.session_state.extracted_texts[1], height=300)
+            st.text_area("", value=st.session_state.extracted_texts[1], height=300, key="text2_display")
     
     # New scan button
     if st.button("NEW SCAN", use_container_width=True):
