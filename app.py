@@ -1,10 +1,11 @@
 import streamlit as st
 import pytesseract
-from PIL import Image
+from PIL import Image, ImageEnhance
 import re
 import os
 import tempfile
 import glob
+from PIL.ExifTags import TAGS
 
 # Page configuration
 st.set_page_config(
@@ -25,8 +26,34 @@ if 'processing' not in st.session_state:
 if 'matching_numbers' not in st.session_state:
     st.session_state.matching_numbers = None
 
+def correct_image_orientation(image):
+    """Correct image orientation based on EXIF metadata."""
+    try:
+        # Get EXIF data
+        exif = image.getexif()
+        if exif is not None:
+            for tag_id, value in exif.items():
+                tag = TAGS.get(tag_id, tag_id)
+                if tag == 'Orientation':
+                    if value == 3:
+                        image = image.rotate(180, expand=True)
+                    elif value == 6:
+                        image = image.rotate(-90, expand=True)
+                    elif value == 8:
+                        image = image.rotate(90, expand=True)
+                    break
+    except Exception:
+        # If EXIF data is not available or fails, return the original image
+        pass
+    return image
+
 def reset_captured_images():
     """Reset captured images and extracted text."""
+    for image_path in st.session_state.captured_images:
+        try:
+            os.remove(image_path)
+        except:
+            pass
     st.session_state.captured_images = []
     st.session_state.extracted_texts = []
     st.session_state.matching_numbers = None
@@ -52,8 +79,15 @@ def process_images():
         with st.spinner('Processing images...'):
             extracted_texts = []
             for image_path in st.session_state.captured_images:
-                # Open image and perform OCR
+                # Open image and correct orientation
                 image = Image.open(image_path)
+                image = correct_image_orientation(image)
+                
+                # Preprocess image for better OCR: convert to grayscale and enhance contrast
+                image = image.convert('L')  # Convert to grayscale
+                image = ImageEnhance.Contrast(image).enhance(2.0)  # Increase contrast
+                
+                # Perform OCR
                 text = pytesseract.image_to_string(image, lang='eng')
                 extracted_texts.append(text)
             
@@ -135,12 +169,14 @@ def comparison_screen():
         st.subheader("Document 1")
         if st.session_state.captured_images:
             image = Image.open(st.session_state.captured_images[0])
+            image = correct_image_orientation(image)  # Correct orientation for display
             st.image(image, use_column_width=True)
     
     with col2:
         st.subheader("Document 2")
         if len(st.session_state.captured_images) > 1:
             image = Image.open(st.session_state.captured_images[1])
+            image = correct_image_orientation(image)  # Correct orientation for display
             st.image(image, use_column_width=True)
     
     # Match status
