@@ -29,7 +29,6 @@ if 'matching_numbers' not in st.session_state:
 def correct_image_orientation(image):
     """Correct image orientation based on EXIF metadata."""
     try:
-        # Get EXIF data
         exif = image.getexif()
         if exif is not None:
             for tag_id, value in exif.items():
@@ -43,8 +42,10 @@ def correct_image_orientation(image):
                         image = image.rotate(90, expand=True)
                     break
     except Exception:
-        # If EXIF data is not available or fails, return the original image
         pass
+    # Heuristic: Rotate if width > height (common for mobile images)
+    if image.width > image.height:
+        image = image.rotate(-90, expand=True)
     return image
 
 def reset_captured_images():
@@ -63,15 +64,22 @@ def switch_screen(screen_name):
     st.session_state.current_screen = screen_name
 
 def extract_invoice_numbers(text):
-    """Extract invoice numbers (sequences of 11 or more digits) from text."""
-    pattern = r'\b\d{11,}\b'
-    return re.findall(pattern, text)
+    """Extract 13-digit invoice numbers, handling potential OCR noise."""
+    # Clean text: remove spaces, dashes, commas within numbers
+    cleaned_text = re.sub(r'[\s,-]', '', text)
+    # Match exactly 13 digits
+    pattern = r'\b\d{13}\b'
+    numbers = re.findall(pattern, cleaned_text)
+    # Debug: Print extracted numbers
+    print(f"Extracted numbers: {numbers}")
+    return numbers
 
 def compare_invoice_numbers(text1, text2):
     """Compare invoice numbers between two texts and find matches."""
     numbers1 = extract_invoice_numbers(text1)
     numbers2 = extract_invoice_numbers(text2)
-    return [num for num in numbers1 if num in numbers2] or None
+    matches = [num for num in numbers1 if num in numbers2]
+    return matches if matches else None
 
 def process_images():
     """Process uploaded images with OCR and compare them."""
@@ -83,12 +91,13 @@ def process_images():
                 image = Image.open(image_path)
                 image = correct_image_orientation(image)
                 
-                # Preprocess image for better OCR: convert to grayscale and enhance contrast
+                # Preprocess image for better OCR
                 image = image.convert('L')  # Convert to grayscale
                 image = ImageEnhance.Contrast(image).enhance(2.0)  # Increase contrast
+                image = image.resize((int(image.width * 1.5), int(image.height * 1.5)))  # Increase resolution
                 
-                # Perform OCR
-                text = pytesseract.image_to_string(image, lang='eng')
+                # Perform OCR with specific config for digits
+                text = pytesseract.image_to_string(image, lang='eng', config='--psm 6 --oem 3 -c tessedit_char_whitelist=0123456789')
                 extracted_texts.append(text)
             
             # Save extracted texts to session state
@@ -169,22 +178,22 @@ def comparison_screen():
         st.subheader("Document 1")
         if st.session_state.captured_images:
             image = Image.open(st.session_state.captured_images[0])
-            image = correct_image_orientation(image)  # Correct orientation for display
+            image = correct_image_orientation(image)
             st.image(image, use_column_width=True)
     
     with col2:
         st.subheader("Document 2")
         if len(st.session_state.captured_images) > 1:
             image = Image.open(st.session_state.captured_images[1])
-            image = correct_image_orientation(image)  # Correct orientation for display
+            image = correct_image_orientation(image)
             st.image(image, use_column_width=True)
     
     # Match status
     if st.session_state.matching_numbers:
-        st.success("✅ MATCH FOUND!")
+        st.markdown('<p style="color:green;font-size:20px;">✅ MATCHED!</p>', unsafe_allow_html=True)
         st.write(f"Invoice Number: {st.session_state.matching_numbers[0]}")
     else:
-        st.error("❌ NO MATCH FOUND")
+        st.markdown('<p style="color:red;font-size:20px;">❌ NO MATCH FOUND</p>', unsafe_allow_html=True)
         st.write("No matching invoice numbers between documents")
     
     # Display extracted text side by side
