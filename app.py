@@ -1,11 +1,10 @@
 import streamlit as st
 import pytesseract
-from PIL import Image, ImageEnhance
+from PIL import Image
 import re
 import os
 import tempfile
 import glob
-from PIL.ExifTags import TAGS
 
 # Page configuration
 st.set_page_config(
@@ -26,35 +25,8 @@ if 'processing' not in st.session_state:
 if 'matching_numbers' not in st.session_state:
     st.session_state.matching_numbers = None
 
-def correct_image_orientation(image):
-    """Correct image orientation based on EXIF metadata."""
-    try:
-        exif = image.getexif()
-        if exif is not None:
-            for tag_id, value in exif.items():
-                tag = TAGS.get(tag_id, tag_id)
-                if tag == 'Orientation':
-                    if value == 3:
-                        image = image.rotate(180, expand=True)
-                    elif value == 6:
-                        image = image.rotate(-90, expand=True)
-                    elif value == 8:
-                        image = image.rotate(90, expand=True)
-                    break
-    except Exception:
-        pass
-    # Heuristic: Rotate if width > height (common for mobile images)
-    if image.width > image.height:
-        image = image.rotate(-90, expand=True)
-    return image
-
 def reset_captured_images():
     """Reset captured images and extracted text."""
-    for image_path in st.session_state.captured_images:
-        try:
-            os.remove(image_path)
-        except:
-            pass
     st.session_state.captured_images = []
     st.session_state.extracted_texts = []
     st.session_state.matching_numbers = None
@@ -64,22 +36,15 @@ def switch_screen(screen_name):
     st.session_state.current_screen = screen_name
 
 def extract_invoice_numbers(text):
-    """Extract 13-digit invoice numbers, handling potential OCR noise."""
-    # Clean text: remove spaces, dashes, commas within numbers
-    cleaned_text = re.sub(r'[\s,-]', '', text)
-    # Match exactly 13 digits
-    pattern = r'\b\d{13}\b'
-    numbers = re.findall(pattern, cleaned_text)
-    # Debug: Print extracted numbers
-    print(f"Extracted numbers: {numbers}")
-    return numbers
+    """Extract invoice numbers (sequences of 11 or more digits) from text."""
+    pattern = r'\b\d{11,}\b'
+    return re.findall(pattern, text)
 
 def compare_invoice_numbers(text1, text2):
     """Compare invoice numbers between two texts and find matches."""
     numbers1 = extract_invoice_numbers(text1)
     numbers2 = extract_invoice_numbers(text2)
-    matches = [num for num in numbers1 if num in numbers2]
-    return matches if matches else None
+    return [num for num in numbers1 if num in numbers2] or None
 
 def process_images():
     """Process uploaded images with OCR and compare them."""
@@ -87,17 +52,9 @@ def process_images():
         with st.spinner('Processing images...'):
             extracted_texts = []
             for image_path in st.session_state.captured_images:
-                # Open image and correct orientation
+                # Open image and perform OCR
                 image = Image.open(image_path)
-                image = correct_image_orientation(image)
-                
-                # Preprocess image for better OCR
-                image = image.convert('L')  # Convert to grayscale
-                image = ImageEnhance.Contrast(image).enhance(2.0)  # Increase contrast
-                image = image.resize((int(image.width * 1.5), int(image.height * 1.5)))  # Increase resolution
-                
-                # Perform OCR with specific config for digits
-                text = pytesseract.image_to_string(image, lang='eng', config='--psm 6 --oem 3 -c tessedit_char_whitelist=0123456789')
+                text = pytesseract.image_to_string(image, lang='eng')
                 extracted_texts.append(text)
             
             # Save extracted texts to session state
@@ -178,22 +135,20 @@ def comparison_screen():
         st.subheader("Document 1")
         if st.session_state.captured_images:
             image = Image.open(st.session_state.captured_images[0])
-            image = correct_image_orientation(image)
             st.image(image, use_column_width=True)
     
     with col2:
         st.subheader("Document 2")
         if len(st.session_state.captured_images) > 1:
             image = Image.open(st.session_state.captured_images[1])
-            image = correct_image_orientation(image)
             st.image(image, use_column_width=True)
     
     # Match status
     if st.session_state.matching_numbers:
-        st.markdown('<p style="color:green;font-size:20px;">✅ MATCHED!</p>', unsafe_allow_html=True)
+        st.success("✅ MATCH FOUND!")
         st.write(f"Invoice Number: {st.session_state.matching_numbers[0]}")
     else:
-        st.markdown('<p style="color:red;font-size:20px;">❌ NO MATCH FOUND</p>', unsafe_allow_html=True)
+        st.error("❌ NO MATCH FOUND")
         st.write("No matching invoice numbers between documents")
     
     # Display extracted text side by side
