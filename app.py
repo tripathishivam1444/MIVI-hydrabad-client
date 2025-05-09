@@ -1,13 +1,10 @@
 import streamlit as st
-import easyocr
-import cv2
-import numpy as np
+import pytesseract
+from PIL import Image
 import re
 import os
-import glob
 import tempfile
-from PIL import Image as PILImage
-import time
+import glob
 
 # Page configuration
 st.set_page_config(
@@ -16,7 +13,7 @@ st.set_page_config(
     layout="wide"
 )
 
-# Initialize session state if not already done
+# Initialize session state
 if 'captured_images' not in st.session_state:
     st.session_state.captured_images = []
 if 'extracted_texts' not in st.session_state:
@@ -28,19 +25,8 @@ if 'processing' not in st.session_state:
 if 'matching_numbers' not in st.session_state:
     st.session_state.matching_numbers = None
 
-def delete_jpg_images():
-    """Delete all temporary .jpg files."""
-    jpg_files = glob.glob("*.jpg")
-    
-    for file in jpg_files:
-        try:
-            os.remove(file)
-            print(f"Deleted: {file}")
-        except Exception as e:
-            print(f"Error deleting {file}: {e}")
-
 def reset_captured_images():
-    """Reset the captured images and extracted text."""
+    """Reset captured images and extracted text."""
     st.session_state.captured_images = []
     st.session_state.extracted_texts = []
     st.session_state.matching_numbers = None
@@ -58,31 +44,18 @@ def compare_invoice_numbers(text1, text2):
     """Compare invoice numbers between two texts and find matches."""
     numbers1 = extract_invoice_numbers(text1)
     numbers2 = extract_invoice_numbers(text2)
-    
-    matching_numbers = [num for num in numbers1 if num in numbers2]
-    return matching_numbers if matching_numbers else None
+    return [num for num in numbers1 if num in numbers2] or None
 
 def process_images():
-    """Process the captured images with OCR and compare them."""
+    """Process uploaded images with OCR and compare them."""
     try:
-        # Show loading spinner
         with st.spinner('Processing images...'):
-            # Initialize OCR reader
-            reader = easyocr.Reader(['en'])
-            
-            # Process each image
             extracted_texts = []
             for image_path in st.session_state.captured_images:
-                # Process with EasyOCR
-                results = reader.readtext(image_path)
-                
-                # Extract text
-                extracted_text = ""
-                for detection in results:
-                    text = detection[1]
-                    extracted_text += text + "\n"
-                
-                extracted_texts.append(extracted_text)
+                # Open image and perform OCR
+                image = Image.open(image_path)
+                text = pytesseract.image_to_string(image, lang='eng')
+                extracted_texts.append(text)
             
             # Save extracted texts to session state
             st.session_state.extracted_texts = extracted_texts
@@ -103,61 +76,9 @@ def process_images():
 def home_screen():
     """Display the home screen."""
     st.title("OCR Invoice Scanner")
-    
-    col1, col2 = st.columns([1, 1])
-    
-    with col1:
-        if st.button("OPEN CAMERA", use_container_width=True):
-            reset_captured_images()
-            switch_screen('camera')
-    
-    with col2:
-        if st.button("UPLOAD FROM GALLERY", use_container_width=True):
-            reset_captured_images()
-            switch_screen('upload')
-
-def camera_screen():
-    """Display the camera capture screen."""
-    st.title("Camera Capture")
-    st.write(f"Images Captured: {len(st.session_state.captured_images)}/2")
-    
-    # Streamlit has no built-in camera access, so we'll use file uploader as a workaround
-    st.write("Please capture or upload an image:")
-    
-    image_file = st.camera_input("Take a photo")
-    
-    col1, col2 = st.columns([1, 1])
-    
-    with col1:
-        if st.button("BACK", use_container_width=True):
-            switch_screen('home')
-    
-    with col2:
-        # This button is shown only when an image is captured
-        if image_file is not None:
-            if st.button("CAPTURE", use_container_width=True):
-                if len(st.session_state.captured_images) >= 2:
-                    st.warning("You've already captured 2 images. Processing...")
-                    st.session_state.processing = True
-                    process_images()
-                else:
-                    # Save captured image to a temporary file
-                    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
-                    temp_file.write(image_file.getvalue())
-                    temp_file_path = temp_file.name
-                    temp_file.close()
-                    
-                    # Add to captured images
-                    st.session_state.captured_images.append(temp_file_path)
-                    
-                    # If we have two images, process them
-                    if len(st.session_state.captured_images) == 2:
-                        st.session_state.processing = True
-                        process_images()
-                    else:
-                        st.success("Captured image 1. Please capture one more.")
-                        # Refresh to clear camera input for next capture
-                        st.experimental_rerun()
+    if st.button("UPLOAD FROM GALLERY", use_container_width=True):
+        reset_captured_images()
+        switch_screen('upload')
 
 def upload_screen():
     """Display the file upload screen."""
@@ -181,25 +102,21 @@ def upload_screen():
     
     with col2:
         if uploaded_files and st.button("SELECT IMAGES", use_container_width=True):
-            # Limit to first 2 images if more were selected
             files_to_process = uploaded_files[:2]
             
             # Save uploaded files to temporary files
             for uploaded_file in files_to_process:
-                # Save file to a temporary location
                 temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
                 temp_file.write(uploaded_file.getvalue())
                 temp_file_path = temp_file.name
                 temp_file.close()
                 
-                # Add to captured images
                 st.session_state.captured_images.append(temp_file_path)
             
-            # If we have more than 2 images, keep only the first 2
-            if len(st.session_state.captured_images) > 2:
-                st.session_state.captured_images = st.session_state.captured_images[:2]
+            # Keep only the first 2 images
+            st.session_state.captured_images = st.session_state.captured_images[:2]
             
-            # If we have two images, process them
+            # Process if two images are selected
             if len(st.session_state.captured_images) == 2:
                 st.session_state.processing = True
                 process_images()
@@ -216,14 +133,14 @@ def comparison_screen():
     
     with col1:
         st.subheader("Document 1")
-        if len(st.session_state.captured_images) > 0:
-            image = PILImage.open(st.session_state.captured_images[0])
+        if st.session_state.captured_images:
+            image = Image.open(st.session_state.captured_images[0])
             st.image(image, use_column_width=True)
     
     with col2:
         st.subheader("Document 2")
         if len(st.session_state.captured_images) > 1:
-            image = PILImage.open(st.session_state.captured_images[1])
+            image = Image.open(st.session_state.captured_images[1])
             st.image(image, use_column_width=True)
     
     # Match status
@@ -239,7 +156,7 @@ def comparison_screen():
     
     with text_col1:
         st.subheader("Document 1 Text:")
-        if len(st.session_state.extracted_texts) > 0:
+        if st.session_state.extracted_texts:
             st.text_area("", value=st.session_state.extracted_texts[0], height=300)
     
     with text_col2:
@@ -252,19 +169,13 @@ def comparison_screen():
         reset_captured_images()
         switch_screen('home')
 
-# Main app logic
 def main():
-    # Clean up any temporary files at startup
-    # delete_jpg_images()
-    
-    # Show the appropriate screen based on session state
+    """Main app logic."""
     if st.session_state.processing:
         st.spinner("Processing Images...")
         process_images()
     elif st.session_state.current_screen == 'home':
         home_screen()
-    elif st.session_state.current_screen == 'camera':
-        camera_screen()
     elif st.session_state.current_screen == 'upload':
         upload_screen()
     elif st.session_state.current_screen == 'comparison':
